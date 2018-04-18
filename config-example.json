@@ -20,6 +20,7 @@
   "max_bid": 999,
   "auto_bid": 0.5,
   "delegators_auto_bid": true,
+  "delegators_min_vests": 100000,
   "batch_vote_weight": 100,
   "min_post_age": 20,
   "max_post_age": 84,

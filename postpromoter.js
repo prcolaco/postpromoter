@@ -324,6 +324,9 @@ function resteem(bid) {
 function getDelegatorsPosts(callback) {
   // Go through delegators and get their latest posts
   delegators.map(deleg => {
+    // Ignore small delegators
+    if (parseFloat(deleg.vesting_shares) < config.delegators_min_vests) return deleg;
+
     // Get this delegator account history
     steem.api.getAccountHistory(deleg.delegator, -1, 50, (err, result) => {
       if (err || !result) {
