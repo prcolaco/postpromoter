@@ -10,7 +10,7 @@ function loadDelegations(account, callback) {
 function getTransactions(account, start, callback) {
   var last_trans = start;
 	utils.log('Loading history for delegators at transaction: ' + (start < 0 ? 'latest' : start));
-	
+
   steem.api.getAccountHistory(account, start, (start < 0) ? 10000 : Math.min(start, 10000), function (err, result) {
     if(err) {
       console.log(err);
@@ -29,7 +29,7 @@ function getTransactions(account, start, callback) {
       // Save the ID of the last transaction that was processed.
       last_trans = trans[0];
     }
-		
+
     if(last_trans > 0 && last_trans != start)
       getTransactions(account, last_trans, callback);
     else {
@@ -37,7 +37,7 @@ function getTransactions(account, start, callback) {
 				utils.log('********* ALERT - Full account history not available from this node, not all delegators may have been loaded!! ********');
 				utils.log('********* Last available transaction was: ' + last_trans + ' ********');
 			}
-			
+
       processDelegations(callback);
 		}
   });

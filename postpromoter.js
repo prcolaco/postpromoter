@@ -12,7 +12,6 @@ var config = null;
 var first_load = true;
 var isVoting = false;
 var last_withdrawal = null;
-var use_delegators = false;
 var round_end_timeout = -1;
 var steem_price = 1;  // This will get overridden with actual prices if a price_feed_url is specified in settings
 var sbd_price = 1;    // This will get overridden with actual prices if a price_feed_url is specified in settings
@@ -79,30 +78,25 @@ function startup() {
     utils.log('Restored saved bot state: ' + JSON.stringify({ last_trans: last_trans, bids: outstanding_bids.length, last_withdrawal: last_withdrawal }));
   }
 
-  // Check whether or not auto-withdrawals are set to be paid to delegators.
-  use_delegators = config.auto_withdrawal && config.auto_withdrawal.active && config.auto_withdrawal.accounts.find(a => a.name == '$delegators');
+  // Load the list of delegators to the account
+  if(fs.existsSync('delegators.json')) {
+    delegators = loadDelegators();
 
-  // If so then we need to load the list of delegators to the account
-  if(use_delegators) {
-    if(fs.existsSync('delegators.json')) {
-      delegators = JSON.parse(fs.readFileSync("delegators.json"));
-
+    var vests = delegators.reduce(function (total, v) { return total + parseFloat(v.vesting_shares); }, 0);
+    utils.log('Delegators Loaded (from disk) - ' + delegators.length + ' delegators and ' + vests + ' VESTS in total!');
+  }
+  else
+  {
+    var del = require('./delegators');
+    utils.log('Started loading delegators from account history...');
+    del.loadDelegations(config.account, function(d) {
+      delegators = d;
       var vests = delegators.reduce(function (total, v) { return total + parseFloat(v.vesting_shares); }, 0);
-      utils.log('Delegators Loaded (from disk) - ' + delegators.length + ' delegators and ' + vests + ' VESTS in total!');
-    }
-    else
-    {
-      var del = require('./delegators');
-      utils.log('Started loading delegators from account history...');
-      del.loadDelegations(config.account, function(d) {
-        delegators = d;
-        var vests = delegators.reduce(function (total, v) { return total + parseFloat(v.vesting_shares); }, 0);
-        utils.log('Delegators Loaded (from account history) - ' + delegators.length + ' delegators and ' + vests + ' VESTS in total!');
+      utils.log('Delegators Loaded (from account history) - ' + delegators.length + ' delegators and ' + vests + ' VESTS in total!');
 
-        // Save the list of delegators to disk
-        saveDelegators();
-      });
-    }
+      // Save the list of delegators to disk
+      saveDelegators();
+    });
   }
 
   // Schedule to run every 10 seconds
@@ -161,12 +155,15 @@ function startProcess() {
 					}, 30 * 1000);
 				}
 
+        // Load delegators new posts to autobid
+        getDelegatorsPosts();
+
 				// Load transactions to the bot account
 				getTransactions();
 
 				// Save the state of the bot to disk
 				saveState();
-				
+
 				// Check if there are any rewards to claim.
 				claimRewards();
 
@@ -317,6 +314,56 @@ function resteem(bid) {
   });
 }
 
+function getDelegatorsPosts(callback) {
+  // Go through delegators and get their latest posts
+  delegators.map(deleg => {
+    // Get this delegator account history
+    steem.api.getAccountHistory(deleg.delegator, -1, 50, (err, result) => {
+      if (err || !result) {
+        logError('Error loading delegator account history: ' + err);
+
+        if (callback)
+          callback();
+
+        return;
+      }
+
+      result.reverse();
+
+      // Go through the result and find post transactions
+      result.map(trans => {
+        const last = deleg.last_trans || -1;
+
+        // Is this new?
+        if(trans[0] <= last) return;
+
+        const op = trans[1].op;
+
+        // Get only own root posts
+        if(op[0] === "comment" && op[1].author === deleg.delegator && op[1].parent_author === '') {
+          const author = op[1].author;
+          const permlink = op[1].permlink;
+
+          // Create automatic bid for this delegator post
+          autobidPost(author, permlink);
+
+          // Save this as last transaction
+          deleg.last_trans = trans[0];
+        }
+      });
+    });
+
+    return deleg;
+  });
+
+  // Save the updated list of delegators to disk
+  saveDelegators();
+
+  // To comply with existing pattern...
+  if (callback)
+    callback();
+}
+
 function getTransactions(callback) {
   var num_trans = 50;
 
@@ -381,7 +428,7 @@ function getTransactions(callback) {
               // Bid amount is just right!
               checkPost(op[1].memo, amount, currency, op[1].from, 0);
             }
-          } else if(use_delegators && op[0] == 'delegate_vesting_shares' && op[1].delegatee == account.name) {
+          } else if(op[0] == 'delegate_vesting_shares' && op[1].delegatee == account.name) {
             // If we are paying out to delegators, then update the list of delegators when new delegation transactions come in
             var delegator = delegators.find(d => d.delegator == op[1].delegator);
 
@@ -425,7 +472,7 @@ function checkRoundFillLimit(amount, currency) {
   return (vote_value_usd * 0.75 * config.round_fill_limit < bid_value + new_bid_value);
 }
 
-function checkPost(memo, amount, currency, sender, retries) {
+function checkPost(memo, amount, currency, sender) {
     // Parse the author and permlink from the memo URL
     var permLink = memo.substr(memo.lastIndexOf('/') + 1);
     var site = memo.substring(memo.indexOf('://')+3,memo.indexOf('/', memo.indexOf('://')+3));
@@ -452,11 +499,20 @@ function checkPost(memo, amount, currency, sender, retries) {
       return;
     }
 
+    // Now we can process this post
+    return processPost(author, permLink, amount, currency, sender);
+}
+
+function autobidPost(author, permlink) {
+    return processPost(author, permlink, config.auto_bid, sbd_price > steem_price ? 'SBD' : 'STEEM', author, true);
+}
+
+function processPost(author, permLink, amount, currency, sender, autobid = false, retries = 0) {
     // Check if this author has gone over the max bids per author per round
     if(config.max_per_author_per_round && config.max_per_author_per_round > 0) {
       if(outstanding_bids.filter(b => b.author == author).length >= config.max_per_author_per_round)
       {
-        refund(sender, amount, currency, 'bids_per_round');
+        if (!autobid) refund(sender, amount, currency, 'bids_per_round');
         return;
       }
     }
@@ -465,10 +521,9 @@ function checkPost(memo, amount, currency, sender, retries) {
 
     steem.api.getContent(author, permLink, function (err, result) {
         if (!err && result && result.id > 0) {
-
             // If comments are not allowed then we need to first check if the post is a comment
             if(!config.allow_comments && (result.parent_author != null && result.parent_author != '')) {
-              refund(sender, amount, currency, 'no_comments');
+              if (!autobid) refund(sender, amount, currency, 'no_comments');
               return;
             }
 
@@ -480,7 +535,7 @@ function checkPost(memo, amount, currency, sender, retries) {
                 var tag = tags.find(t => config.blacklisted_tags.indexOf(t) >= 0);
 
                 if(tag) {
-                  refund(sender, amount, currency, 'blacklist_tag', 0, tag);
+                  if (!autobid) refund(sender, amount, currency, 'blacklist_tag', 0, tag);
                   return;
                 }
               }
@@ -492,7 +547,7 @@ function checkPost(memo, amount, currency, sender, retries) {
             // Get the list of votes on this post to make sure the bot didn't already vote on it (you'd be surprised how often people double-submit!)
             var votes = result.active_votes.filter(function(vote) { return vote.voter == account.name; });
 
-            if (votes.length > 0 || (new Date() - created) >= (config.max_post_age * 60 * 60 * 1000)) {
+            if (!autobid && (votes.length > 0 || (new Date() - created) >= (config.max_post_age * 60 * 60 * 1000))) {
                 // This post is already voted on by this bot or the post is too old to be voted on
                 refund(sender, amount, currency, ((votes.length > 0) ? 'already_voted' : 'max_age'));
                 return;
@@ -509,27 +564,28 @@ function checkPost(memo, amount, currency, sender, retries) {
             }
 
             // Check if this post is below the minimum post age
-            if(config.min_post_age && config.min_post_age > 0 && (new Date() - created + (time_until_vote * 1000)) < (config.min_post_age * 60 * 1000)) {
+            if (!autobid && config.min_post_age && config.min_post_age > 0 && (new Date() - created + (time_until_vote * 1000)) < (config.min_post_age * 60 * 1000)) {
               push_to_next_round = true;
               refund(sender, 0.001, currency, 'min_age');
             }
         } else if(result && result.id == 0) {
-          // Invalid memo
-          refund(sender, amount, currency, 'invalid_post_url');
+          // Invalid post url
+          if (!autobid) refund(sender, amount, currency, 'invalid_post_url');
           return;
         } else {
-          logError('Error loading post: ' + memo + ', Error: ' + err);
+          logError('Error loading post: @' + author + '/' + permLink + ', Error: ' + err);
 
           // Try again on error
           if(retries < 2)
-            setTimeout(function() { checkPost(memo, amount, currency, sender, retries + 1); }, 3000);
+            setTimeout(function() { processPost(author, permLink, amount, currency, sender, retries + 1); }, 3000);
           else {
-            utils.log('============= Load post failed three times for: ' + memo + ' ===============');
+            utils.log('============= Load post failed three times for: @' + author + '/' + permLink + ' ===============');
 
-            refund(sender, amount, currency, 'invalid_post_url');
+            if (!autobid) refund(sender, amount, currency, 'invalid_post_url');
             return;
           }
         }
+console.log('@' + author + '/' + permLink)
 
         if(!push_to_next_round && checkRoundFillLimit(amount, currency)) {
           push_to_next_round = true;
@@ -560,7 +616,7 @@ function checkPost(memo, amount, currency, sender, retries) {
 
           // Check that the new total doesn't exceed the max bid amount per post
           if (new_amount > max_bid)
-            refund(sender, amount, currency, 'above_max_bid');
+            if (!autobid) refund(sender, amount, currency, 'above_max_bid');
           else
             existing_bid.amount = new_amount;
         } else {
@@ -667,9 +723,22 @@ function updateVersion(old_version, new_version) {
   }
 }
 
+function loadDelegators() {
+  var delegators = [];
+
+  try {
+    delegators = JSON.parse(fs.readFileSync("delegators.json"));
+  }
+  catch(e) {
+    utils.log('Error loading delegators from disk: ' + err);
+  }
+
+  return delegators;
+}
+
 function saveDelegators() {
     // Save the list of delegators to disk
-    fs.writeFile('delegators.json', JSON.stringify(delegators), function (err) {
+    fs.writeFile('delegators.json', JSON.stringify(delegators, null, 2), function (err) {
       if (err)
         utils.log('Error saving delegators to disk: ' + err);
     });
