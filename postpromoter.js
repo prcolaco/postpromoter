@@ -633,7 +633,7 @@ function processPost(author, permLink, amount, currency, sender, autobid = false
         }
 
         // If a witness_vote transfer memo is set, check if the sender votes for the bot owner as witness and send them a message if not
-        if (config.transfer_memos['witness_vote'] && config.transfer_memos['witness_vote'] != '') {
+        if (!autobid && config.transfer_memos['witness_vote'] && config.transfer_memos['witness_vote'] != '') {
           checkWitnessVote(sender, sender, currency);
         } else if(!push_to_next_round && config.transfer_memos['bid_confirmation'] && config.transfer_memos['bid_confirmation'] != '') {
 					// Send bid confirmation transfer memo if one is specified
