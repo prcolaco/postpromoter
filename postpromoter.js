@@ -12,6 +12,7 @@ var config = null;
 var first_load = true;
 var isVoting = false;
 var last_withdrawal = null;
+var use_delegators = false;
 var round_end_timeout = -1;
 var steem_price = 1;  // This will get overridden with actual prices if a price_feed_url is specified in settings
 var sbd_price = 1;    // This will get overridden with actual prices if a price_feed_url is specified in settings
@@ -78,25 +79,30 @@ function startup() {
     utils.log('Restored saved bot state: ' + JSON.stringify({ last_trans: last_trans, bids: outstanding_bids.length, last_withdrawal: last_withdrawal }));
   }
 
-  // Load the list of delegators to the account
-  if(fs.existsSync('delegators.json')) {
-    delegators = loadDelegators();
+  // Check whether or not auto-withdrawals are set to be paid to delegators.
+  use_delegators = config.delegators_auto_bid || (config.auto_withdrawal && config.auto_withdrawal.active && config.auto_withdrawal.accounts.find(a => a.name == '$delegators'));
 
-    var vests = delegators.reduce(function (total, v) { return total + parseFloat(v.vesting_shares); }, 0);
-    utils.log('Delegators Loaded (from disk) - ' + delegators.length + ' delegators and ' + vests + ' VESTS in total!');
-  }
-  else
-  {
-    var del = require('./delegators');
-    utils.log('Started loading delegators from account history...');
-    del.loadDelegations(config.account, function(d) {
-      delegators = d;
+  // If so then we need to load the list of delegators to the account
+  if(use_delegators) {
+    if(fs.existsSync('delegators.json')) {
+      delegators = loadDelegators();
+
       var vests = delegators.reduce(function (total, v) { return total + parseFloat(v.vesting_shares); }, 0);
-      utils.log('Delegators Loaded (from account history) - ' + delegators.length + ' delegators and ' + vests + ' VESTS in total!');
+      utils.log('Delegators Loaded (from disk) - ' + delegators.length + ' delegators and ' + vests + ' VESTS in total!');
+    }
+    else
+    {
+      var del = require('./delegators');
+      utils.log('Started loading delegators from account history...');
+      del.loadDelegations(config.account, function(d) {
+        delegators = d;
+        var vests = delegators.reduce(function (total, v) { return total + parseFloat(v.vesting_shares); }, 0);
+        utils.log('Delegators Loaded (from account history) - ' + delegators.length + ' delegators and ' + vests + ' VESTS in total!');
 
-      // Save the list of delegators to disk
-      saveDelegators();
-    });
+        // Save the list of delegators to disk
+        saveDelegators();
+      });
+    }
   }
 
   // Schedule to run every 10 seconds
@@ -155,8 +161,9 @@ function startProcess() {
 					}, 30 * 1000);
 				}
 
-        // Load delegators new posts to autobid
-        getDelegatorsPosts();
+        // Load delegators new posts to autobid if enabled
+        if(config.delegators_auto_bid)
+          getDelegatorsPosts();
 
 				// Load transactions to the bot account
 				getTransactions();
@@ -585,7 +592,6 @@ function processPost(author, permLink, amount, currency, sender, autobid = false
             return;
           }
         }
-console.log('@' + author + '/' + permLink)
 
         if(!push_to_next_round && checkRoundFillLimit(amount, currency)) {
           push_to_next_round = true;
@@ -621,7 +627,8 @@ console.log('@' + author + '/' + permLink)
             existing_bid.amount = new_amount;
         } else {
           // All good - push to the array of valid bids for this round
-          utils.log('Valid Bid - Amount: ' + amount + ' ' + currency + ', Title: ' + result.title);
+          const text = autobid ? 'Delegator Auto Bid' : 'Valid Bid';
+          utils.log(text + ' - Amount: ' + amount + ' ' + currency + ', Title: ' + result.title);
           round.push({ amount: amount, currency: currency, sender: sender, author: result.author, permlink: result.permlink, url: result.url });
         }
 
