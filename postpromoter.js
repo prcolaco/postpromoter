@@ -347,14 +347,23 @@ function getDelegatorsPosts(callback) {
       // Go through the result and find post transactions
       result.map(trans => {
         const last = deleg.last_trans || -1;
+        const last_day = deleg.last_day || 0;
+
+        // Get today timestamp
+        const now = new Date();
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
         // Is this new?
-        if(trans[0] <= last) return;
+        if (trans[0] <= last) return;
+
+        // Is this post in available daily auto bids
+        const auto_bids = deleg.last_day === today ? deleg.auto_bids : 0;
+        if (config.daily_auto_bids >= auto_bids) return;
 
         const op = trans[1].op;
 
         // Get only own root posts
-        if(op[0] === "comment" && op[1].author === deleg.delegator && op[1].parent_author === '') {
+        if (op[0] === "comment" && op[1].author === deleg.delegator && op[1].parent_author === '') {
           const author = op[1].author;
           const permlink = op[1].permlink;
 
@@ -363,6 +372,8 @@ function getDelegatorsPosts(callback) {
 
           // Save this as last transaction
           deleg.last_trans = trans[0];
+          deleg.last_day = today;
+          deleg.auto_bids = ++auto_bids;
         }
       });
     });
