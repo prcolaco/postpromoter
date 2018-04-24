@@ -358,7 +358,7 @@ function getDelegatorsPosts(callback) {
 
         // Is this post in available daily auto bids
         const auto_bids = deleg.last_day === today ? deleg.auto_bids : 0;
-        if (config.daily_auto_bids >= auto_bids) return;
+        if (config.daily_auto_bids < auto_bids) return;
 
         const op = trans[1].op;
 
