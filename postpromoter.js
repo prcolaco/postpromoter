@@ -351,7 +351,7 @@ function getDelegatorsPosts(callback) {
 
         // Get today timestamp
         const now = new Date();
-        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).valueOf();
 
         // Is this new?
         if (trans[0] <= last) return;
