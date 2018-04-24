@@ -373,7 +373,7 @@ function getDelegatorsPosts(callback) {
           // Save this as last transaction
           deleg.last_trans = trans[0];
           deleg.last_day = today;
-          deleg.auto_bids = ++auto_bids;
+          deleg.auto_bids = auto_bids + 1;
         }
       });
     });
