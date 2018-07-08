@@ -9,7 +9,7 @@ function loadDelegations(account, callback) {
 
 function getTransactions(account, start, callback) {
   var last_trans = start;
-	utils.log('Loading history for delegators at transaction: ' + (start < 0 ? 'latest' : start));
+        utils.log('Loading history for delegators at transaction: ' + (start < 0 ? 'latest' : start));
 
   steem.api.getAccountHistory(account, start, (start < 0) ? 10000 : Math.min(start, 10000), function (err, result) {
     if(err) {
@@ -19,8 +19,8 @@ function getTransactions(account, start, callback) {
 
     result.reverse();
 
-		for(var i = 0; i < result.length; i++) {
-			var trans = result[i];
+                for(var i = 0; i < result.length; i++) {
+                        var trans = result[i];
       var op = trans[1].op;
 
       if(op[0] == 'delegate_vesting_shares' && op[1].delegatee == account)
@@ -33,13 +33,13 @@ function getTransactions(account, start, callback) {
     if(last_trans > 0 && last_trans != start)
       getTransactions(account, last_trans, callback);
     else {
-			if(last_trans > 0) {
-				utils.log('********* ALERT - Full account history not available from this node, not all delegators may have been loaded!! ********');
-				utils.log('********* Last available transaction was: ' + last_trans + ' ********');
-			}
+                        if(last_trans > 0) {
+                                utils.log('********* ALERT - Full account history not available from this node, not all delegators may have been loaded!! ********');
+                                utils.log('********* Last available transaction was: ' + last_trans + ' ********');
+                        }
 
       processDelegations(callback);
-		}
+                }
   });
 }
 
